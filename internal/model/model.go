@@ -22,11 +22,16 @@ var (
 )
 
 type Service struct {
-	ID      string `json:"id"`
-	Name    string `json:"name"`
-	Kind    string `json:"kind"`
-	URL     string `json:"url"`
-	Enabled bool   `json:"enabled"`
+	ID                   string `json:"id"`
+	Name                 string `json:"name"`
+	Kind                 string `json:"kind"`
+	URL                  string `json:"url"`
+	Enabled              bool   `json:"enabled"`
+	DesktopNotifications *bool  `json:"desktop_notifications,omitempty"`
+}
+
+func (s Service) NotificationsEnabled() bool {
+	return s.DesktopNotifications == nil || *s.DesktopNotifications
 }
 
 type WindowGeometry struct {
@@ -165,6 +170,16 @@ func (s *State) SetEnabled(id string, enabled bool) error {
 	} else if enabled && s.ActiveID == "" {
 		s.ActiveID = id
 	}
+	return nil
+}
+
+func (s *State) SetNotifications(id string, enabled bool) error {
+	i := s.index(id)
+	if i < 0 {
+		return ErrServiceNotFound
+	}
+	s.Services[i].DesktopNotifications = new(bool)
+	*s.Services[i].DesktopNotifications = enabled
 	return nil
 }
 

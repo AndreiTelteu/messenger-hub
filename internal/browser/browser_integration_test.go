@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"codeberg.org/puregotk/puregotk/v4/gio"
 	"codeberg.org/puregotk/puregotk/v4/glib"
 	"codeberg.org/puregotk/puregotk/v4/gtk"
 )
@@ -32,10 +33,12 @@ func TestViewRuntime(t *testing.T) {
 		dataDir  string
 		cacheDir string
 		loaded   chan struct{}
+		notified chan string
 	}
 	newFixture := func() fixture {
 		dataDir, cacheDir := t.TempDir(), t.TempDir()
 		loaded := make(chan struct{}, 1)
+		notified := make(chan string, 1)
 		view, err := New(dataDir, cacheDir, Callbacks{Changed: func(title, uri string, loading bool) {
 			if !loading && title == "browser integration" && uri == server.URL+"/" {
 				select {
@@ -43,14 +46,23 @@ func TestViewRuntime(t *testing.T) {
 				default:
 				}
 			}
+		}, Notification: func(_ uint64, title, body string) bool {
+			notified <- title + "|" + body
+			return true
 		}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded}
+		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded, notified: notified}
 	}
 
 	a, b := newFixture(), newFixture()
+	settings := a.view.view.GetSettings()
+	if !settings.GetEnableMediaStream() || !settings.GetEnableWebrtc() {
+		settings.Unref()
+		t.Fatal("media stream or WebRTC support is disabled")
+	}
+	settings.Unref()
 	if a.view.session.GoPointer() == b.view.session.GoPointer() {
 		t.Fatal("views share a network session")
 	}
@@ -86,6 +98,38 @@ func TestViewRuntime(t *testing.T) {
 	waitFor(t, 15*time.Second, func() bool {
 		select {
 		case <-b.loaded:
+			return true
+		default:
+			return false
+		}
+	})
+	jsFinished := make(chan error, 1)
+	jsCallback := gio.AsyncReadyCallback(func(_ uintptr, result uintptr, _ uintptr) {
+		value, err := a.view.view.EvaluateJavascriptFinish(&gio.AsyncResultBase{Ptr: result})
+		if value != nil {
+			value.Unref()
+		}
+		jsFinished <- err
+	})
+	script := `void Notification.requestPermission().then(permission => { if (permission === "granted") new Notification("Integration notification", {body: "ready"}); }); "started";`
+	a.view.view.EvaluateJavascript(script, -1, "", server.URL+"/", nil, &jsCallback, 0)
+	waitFor(t, 15*time.Second, func() bool {
+		select {
+		case err := <-jsFinished:
+			if err != nil {
+				t.Fatalf("evaluate notification JavaScript: %v", err)
+			}
+			return true
+		default:
+			return false
+		}
+	})
+	waitFor(t, 15*time.Second, func() bool {
+		select {
+		case got := <-a.notified:
+			if got != "Integration notification|ready" {
+				t.Fatalf("notification = %q", got)
+			}
 			return true
 		default:
 			return false

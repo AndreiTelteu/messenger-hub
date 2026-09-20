@@ -7,20 +7,25 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 
+	"codeberg.org/puregotk/purego"
 	"codeberg.org/puregotk/puregotk/v4/gdk"
 	"codeberg.org/puregotk/puregotk/v4/gio"
 	"codeberg.org/puregotk/puregotk/v4/glib"
 	"codeberg.org/puregotk/puregotk/v4/gobject"
+	"codeberg.org/puregotk/puregotk/v4/gobject/types"
 	"codeberg.org/puregotk/puregotk/v4/gtk"
 	"codeberg.org/puregotk/puregotk/v4/webkit"
 )
 
 type Callbacks struct {
-	Changed func(title, uri string, loading bool)
-	Favicon func(*gdk.Texture)
-	Error   func(string)
+	Changed            func(title, uri string, loading bool)
+	Favicon            func(*gdk.Texture)
+	Error              func(string)
+	Notification       func(id uint64, title, body string) bool
+	NotificationClosed func(id uint64)
 
 	// Permission asks the application to present a user decision. respond must
 	// be called on the GTK thread. If Permission is nil, requests are denied.
@@ -45,14 +50,15 @@ type View struct {
 
 	// Signal callbacks are retained because the generated bindings identify
 	// callbacks using the address of the Go function value.
-	onLoad       func(webkit.WebView, webkit.LoadEvent)
-	onLoadFailed func(webkit.WebView, webkit.LoadEvent, string, uintptr) bool
-	onTerminated func(webkit.WebView, webkit.WebProcessTerminationReason)
-	onNotify     func(gobject.Object, uintptr)
-	onFavicon    func(webkit.FaviconDatabase, string, string)
-	onIconReady  gio.AsyncReadyCallback
-	onCreate     func(webkit.WebView, uintptr) gtk.Widget
-	onPermission func(webkit.WebView, uintptr) bool
+	onLoad         func(webkit.WebView, webkit.LoadEvent)
+	onLoadFailed   func(webkit.WebView, webkit.LoadEvent, string, uintptr) bool
+	onTerminated   func(webkit.WebView, webkit.WebProcessTerminationReason)
+	onNotify       func(gobject.Object, uintptr)
+	onFavicon      func(webkit.FaviconDatabase, string, string)
+	onIconReady    gio.AsyncReadyCallback
+	onCreate       func(webkit.WebView, uintptr) gtk.Widget
+	onPermission   func(webkit.WebView, uintptr) bool
+	onNotification func(webkit.WebView, uintptr) bool
 }
 
 func New(dataDir, cacheDir string, callbacks Callbacks) (*View, error) {
@@ -88,6 +94,13 @@ func New(dataDir, cacheDir string, callbacks Callbacks) (*View, error) {
 	// whichever GTK container embeds it.
 	gobject.IncreaseRef(obj.GoPointer())
 	wv := webkit.WebViewNewFromInternalPtr(obj.GoPointer())
+	settings := wv.GetSettings()
+	settings.SetEnableMediaStream(true)
+	settings.SetEnableWebrtc(true)
+	settings.SetPropertyEnableMedia(true)
+	settings.SetEnableWebaudio(true)
+	settings.SetEnableEncryptedMedia(true)
+	settings.Unref()
 	manager := session.GetWebsiteDataManager()
 	if manager == nil {
 		wv.Unref()
@@ -131,6 +144,17 @@ func (v *View) Widget() *gtk.Widget {
 func (v *View) LoadURL(uri string) {
 	if w := v.webView(); w != nil {
 		w.LoadUri(uri)
+	}
+}
+
+// SetUserAgent changes the identity sent by this isolated browser profile.
+// Call it before the first navigation so feature detection is consistent for
+// the lifetime of the page.
+func (v *View) SetUserAgent(userAgent string) {
+	if w := v.webView(); w != nil {
+		settings := w.GetSettings()
+		settings.SetUserAgent(userAgent)
+		settings.Unref()
 	}
 }
 func (v *View) Reload() {
@@ -210,6 +234,25 @@ func (v *View) connect(w *webkit.WebView, primary bool) {
 		return v.requestPermission(&w, request)
 	}
 	w.ConnectPermissionRequest(&v.onPermission)
+	v.onNotification = func(_ webkit.WebView, ptr uintptr) bool {
+		notification := webkit.NotificationNewFromInternalPtr(ptr)
+		v.mu.Lock()
+		handler, closedHandler, closed := v.cb.Notification, v.cb.NotificationClosed, v.closed
+		v.mu.Unlock()
+		if closed || handler == nil {
+			return true
+		}
+		id := notification.GetId()
+		if !handler(id, notification.GetTitle(), notification.GetBody()) {
+			return true
+		}
+		if closedHandler != nil {
+			onClosed := func(_ webkit.Notification) { closedHandler(id) }
+			notification.ConnectClosed(&onClosed)
+		}
+		return true
+	}
+	w.ConnectShowNotification(&v.onNotification)
 	// Returning false from run-file-chooser leaves WebKitGTK's native chooser
 	// active. Downloads likewise use WebKitGTK's standard download handling.
 }
@@ -250,9 +293,33 @@ func (v *View) report(message string) {
 }
 
 func (v *View) requestPermission(w *webkit.WebView, ptr uintptr) bool {
-	// The generated signal exposes the interface as an opaque pointer. Keep the
-	// prompt conservative instead of guessing its concrete GObject type.
-	kind := "camera, microphone, screen sharing, or notifications"
+	if permissionIs(ptr, notificationPermissionRequestType()) {
+		// The per-service preference controls delivery to the desktop. Keeping the
+		// web permission granted lets the preference be toggled without forcing a
+		// site-data reset or another website prompt.
+		allowPermission(ptr)
+		return true
+	}
+
+	kind := "the requested device"
+	if permissionIs(ptr, webkit.UserMediaPermissionRequestGLibType()) {
+		request := webkit.UserMediaPermissionRequestNewFromInternalPtr(ptr)
+		var devices []string
+		if webkit.UserMediaPermissionIsForAudioDevice(request) {
+			devices = append(devices, "microphone")
+		}
+		if webkit.UserMediaPermissionIsForVideoDevice(request) {
+			devices = append(devices, "camera")
+		}
+		if webkit.UserMediaPermissionIsForDisplayDevice(request) {
+			devices = append(devices, "screen sharing")
+		}
+		if len(devices) > 0 {
+			kind = strings.Join(devices, ", ")
+		}
+	} else if permissionIs(ptr, deviceInfoPermissionRequestType()) {
+		kind = "camera and microphone device information"
+	}
 
 	v.mu.Lock()
 	handler, closed := v.cb.Permission, v.closed
@@ -277,6 +344,22 @@ func (v *View) requestPermission(w *webkit.WebView, ptr uintptr) bool {
 		})
 	})
 	return true
+}
+
+func permissionIs(ptr uintptr, target types.GType) bool {
+	return ptr != 0 && typeCheckInstanceIsA(ptr, target)
+}
+
+var (
+	typeCheckInstanceIsA              func(uintptr, types.GType) bool
+	notificationPermissionRequestType func() types.GType
+	deviceInfoPermissionRequestType   func() types.GType
+)
+
+func init() {
+	purego.RegisterLibFunc(&typeCheckInstanceIsA, purego.RTLD_DEFAULT, "g_type_check_instance_is_a")
+	purego.RegisterLibFunc(&notificationPermissionRequestType, purego.RTLD_DEFAULT, "webkit_notification_permission_request_get_type")
+	purego.RegisterLibFunc(&deviceInfoPermissionRequestType, purego.RTLD_DEFAULT, "webkit_device_info_permission_request_get_type")
 }
 
 func allowPermission(ptr uintptr) { webkit.XWebkitPermissionRequestAllow(ptr) }

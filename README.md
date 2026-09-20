@@ -38,6 +38,9 @@ The active website gets almost the entire window. A narrow favicon rail handles 
 - Persistent drag-and-drop service ordering.
 - Per-service data clearing with confirmation.
 - Native permission prompts, file selection, and authentication popups.
+- Native GNOME notifications with a per-service disable switch in **Manage**.
+- WebRTC, MediaStream, Web Audio, and encrypted-media support enabled in WebKitGTK.
+- A Chromium-compatible browser identity for Microsoft Teams profiles.
 - Persistent window size and maximized state, plus safe X11 position restoration.
 - English interface and keyboard-accessible controls.
 
@@ -111,6 +114,8 @@ The settings file is written atomically with private permissions. A profile lock
 ## Compatibility notes
 
 Messenger Hub is a native web wrapper, not an API integration with the listed providers. A provider may restrict embedded browsers, expire sessions, or change its web client at any time. Calls, screen sharing, notifications, codecs, and OAuth flows depend on WebKitGTK, GStreamer, desktop portals, and each provider's own policy.
+
+Microsoft officially supports Teams for Web on recent Edge, Chrome, Firefox, and Safari releases. Messenger Hub uses a Chromium-compatible identity for Teams and enables WebRTC, media permissions, and the available GStreamer codecs. WebKitGTK is still outside Microsoft's supported browser list, so Teams can continue to reject calls even with those compatibility measures.
 
 ## Development
 

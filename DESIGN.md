@@ -184,7 +184,7 @@ The WebKit surface begins immediately after the rail and fills the rest of the w
 
 ### Status and state surfaces
 
-Loading, errors, and completion messages appear in a compact dark toast centered near the bottom of the web surface. Empty, disabled, and clearing states use Shell Charcoal with Rail Text for titles and State Muted for explanations, centered around the next relevant action with 36px padding. Add, Manage, permission, clear-data, and removal dialogs remain native GTK dialogs with English labels and semantic destructive treatment.
+Loading, errors, and completion messages appear in a compact dark toast centered near the bottom of the web surface. Empty, disabled, and clearing states use Shell Charcoal with Rail Text for titles and State Muted for explanations, centered around the next relevant action with 36px padding. Add, Manage, permission, clear-data, and removal dialogs remain native GTK dialogs with English labels and semantic destructive treatment. Manage keeps service lifecycle and the per-service **Desktop notifications** preference together as native checkboxes.
 
 ## Do's and Don'ts
 

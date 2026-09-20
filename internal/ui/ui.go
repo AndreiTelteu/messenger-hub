@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"log"
 	"math"
+	"net/url"
 	"os"
 	"strings"
 
@@ -30,6 +31,7 @@ type controller struct {
 	pages            map[string]*gtk.Widget
 	rows             map[uintptr]string
 	favicons         map[string]*gdk.Texture
+	notifications    map[string]map[string]struct{}
 	selectedID       string
 	clearing         map[string]bool
 	clearingPages    map[string]*gtk.Widget
@@ -43,7 +45,7 @@ type controller struct {
 // initial, OS-thread-locked goroutine.
 func Run(store *model.Store, state model.State) int {
 	app := gtk.NewApplication(appID, gio.GApplicationNonUniqueValue)
-	c := &controller{app: app, store: store, state: state, views: map[string]*browser.View{}, pages: map[string]*gtk.Widget{}, rows: map[uintptr]string{}, favicons: map[string]*gdk.Texture{}, clearing: map[string]bool{}, clearingPages: map[string]*gtk.Widget{}, disabledPages: map[string]*gtk.Widget{}}
+	c := &controller{app: app, store: store, state: state, views: map[string]*browser.View{}, pages: map[string]*gtk.Widget{}, rows: map[uintptr]string{}, favicons: map[string]*gdk.Texture{}, notifications: map[string]map[string]struct{}{}, clearing: map[string]bool{}, clearingPages: map[string]*gtk.Widget{}, disabledPages: map[string]*gtk.Widget{}}
 	activate := func(_ gio.Application) { c.activate() }
 	app.ConnectActivate(&activate)
 	return int(app.Run(1, []string{"messenger-hub"}))
@@ -609,6 +611,10 @@ func (c *controller) createView(s model.Service) bool {
 		}
 	}
 	callbacks.Favicon = func(texture *gdk.Texture) { c.updateFavicon(s.ID, texture) }
+	callbacks.Notification = func(id uint64, title, body string) bool {
+		return c.showDesktopNotification(s.ID, id, title, body)
+	}
+	callbacks.NotificationClosed = func(id uint64) { c.withdrawDesktopNotification(s.ID, id) }
 	callbacks.Error = func(message string) {
 		if c.closing {
 			return
@@ -621,11 +627,27 @@ func (c *controller) createView(s model.Service) bool {
 		c.error(err)
 		return false
 	}
+	if teamsWebURL(s.URL) {
+		// Teams rejects calls when WebKitGTK identifies itself as Safari on
+		// Linux, even though the required WebRTC and H.264 support is present.
+		// Match the locally supported Chromium generation before first load.
+		v.SetUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
+	}
 	c.views[s.ID] = v
 	c.pages[s.ID] = v.Widget()
 	c.stack.AddNamed(v.Widget(), s.ID)
 	v.LoadURL(s.URL)
 	return true
+}
+
+func teamsWebURL(raw string) bool {
+	u, err := url.Parse(raw)
+	if err != nil {
+		return false
+	}
+	host := strings.ToLower(u.Hostname())
+	return host == "teams.microsoft.com" || strings.HasSuffix(host, ".teams.microsoft.com") ||
+		host == "teams.cloud.microsoft" || strings.HasSuffix(host, ".teams.cloud.microsoft")
 }
 
 func (c *controller) showEmpty() {
@@ -815,6 +837,10 @@ func (c *controller) showManageDialogFor(serviceID string) {
 	enabled := gtk.NewCheckButtonWithLabel("Service enabled")
 	enabled.SetActive(s.Enabled)
 	area.Append(&enabled.Widget)
+	notifications := gtk.NewCheckButtonWithLabel("Desktop notifications")
+	notifications.SetActive(s.NotificationsEnabled())
+	notifications.SetTooltipText("Show this service's web notifications in GNOME")
+	area.Append(&notifications.Widget)
 	inlineError := gtk.NewLabel("")
 	inlineError.SetXalign(0)
 	inlineError.SetWrap(true)
@@ -870,12 +896,19 @@ func (c *controller) showManageDialogFor(serviceID string) {
 				inlineError.SetLabel(err.Error())
 				return
 			}
+			if err := candidate.SetNotifications(s.ID, notifications.GetActive()); err != nil {
+				inlineError.SetLabel(err.Error())
+				return
+			}
 			if err := c.store.Save(candidate); err != nil {
 				inlineError.SetLabel(err.Error())
 				return
 			}
 			urlChanged := normalized != s.URL
 			c.state = candidate
+			if !notifications.GetActive() {
+				c.withdrawServiceNotifications(s.ID)
+			}
 			// Recreate a disabled placeholder on its next presentation so a
 			// renamed service cannot retain stale text.
 			c.removeDisabledPage(s.ID)
@@ -942,6 +975,53 @@ func (c *controller) askPermission(kind, origin string, respond func(bool)) {
 	d.Present()
 }
 
+func (c *controller) showDesktopNotification(serviceID string, webID uint64, title, body string) bool {
+	service, ok := c.service(serviceID)
+	if !ok || !service.NotificationsEnabled() {
+		return false
+	}
+	if strings.TrimSpace(title) == "" {
+		title = service.Name
+	}
+	notification := gio.NewNotification(title)
+	if notification == nil {
+		return false
+	}
+	if body != "" {
+		notification.SetBody(body)
+	}
+	notification.SetCategory("im.received")
+	notification.SetPriority(gio.GNotificationPriorityNormalValue)
+	key := desktopNotificationKey(serviceID, webID)
+	c.app.SendNotification(key, notification)
+	notification.Unref()
+	if c.notifications[serviceID] == nil {
+		c.notifications[serviceID] = map[string]struct{}{}
+	}
+	c.notifications[serviceID][key] = struct{}{}
+	return true
+}
+
+func (c *controller) withdrawDesktopNotification(serviceID string, webID uint64) {
+	key := desktopNotificationKey(serviceID, webID)
+	c.app.WithdrawNotification(key)
+	delete(c.notifications[serviceID], key)
+	if len(c.notifications[serviceID]) == 0 {
+		delete(c.notifications, serviceID)
+	}
+}
+
+func (c *controller) withdrawServiceNotifications(serviceID string) {
+	for key := range c.notifications[serviceID] {
+		c.app.WithdrawNotification(key)
+	}
+	delete(c.notifications, serviceID)
+}
+
+func desktopNotificationKey(serviceID string, webID uint64) string {
+	return fmt.Sprintf("service-%s-%d", serviceID, webID)
+}
+
 func (c *controller) setEnabled(id string, enabled bool) {
 	if c.clearing[id] {
 		c.setStatus("Wait for data clearing to finish before changing this service.")
@@ -952,6 +1032,7 @@ func (c *controller) setEnabled(id string, enabled bool) {
 		c.removeDisabledPage(id)
 	}
 	if !enabled {
+		c.withdrawServiceNotifications(id)
 		c.destroyView(id)
 	}
 	c.persist()
@@ -989,6 +1070,7 @@ func (c *controller) remove(id string) {
 		return
 	}
 	c.destroyView(id)
+	c.withdrawServiceNotifications(id)
 	c.removeDisabledPage(id)
 	if page := c.clearingPages[id]; page != nil {
 		c.stack.Remove(page)
@@ -1027,7 +1109,7 @@ func (c *controller) clearData(id string) {
 		data, derr := c.store.DataProfileDir(id)
 		cache, cerr := c.store.CacheProfileDir(id)
 		if derr != nil || cerr != nil {
-			c.error(fmt.Errorf("profil invalid"))
+			c.error(fmt.Errorf("invalid profile"))
 			return
 		}
 		var err error

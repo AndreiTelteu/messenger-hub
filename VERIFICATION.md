@@ -24,6 +24,9 @@ Verified on CachyOS with GNOME Wayland, GTK 4.22.5, WebKitGTK 2.52.6, Go 1.27.1,
 - Verified right-click, Menu, and Shift+F10 service actions.
 - Verified accessible service names and disabled-state labels.
 - Verified readable disabled and empty states on the dark surface.
+- Verified Web Notification permission and delivery through the WebKit integration callback.
+- Verified that MediaStream and WebRTC are enabled on each WebView.
+- Verified that the per-service notification preference defaults on and persists when disabled.
 - Verified safe window-size restoration and X11 fallback when saved coordinates are offscreen.
 
 No real account credentials were entered and no messages were sent. Full provider authentication, calls, screen sharing, notifications, and file transfers remain dependent on each provider and the installed WebKitGTK/GStreamer stack.

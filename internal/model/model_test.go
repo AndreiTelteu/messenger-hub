@@ -96,6 +96,23 @@ func TestStateBoundaryErrorsDoNotMutate(t *testing.T) {
 	}
 }
 
+func TestDesktopNotificationsDefaultOnAndCanBeDisabled(t *testing.T) {
+	state := NewState()
+	service := mustService(t, "Teams", "teams.microsoft.com")
+	if !service.NotificationsEnabled() {
+		t.Fatal("new service notifications are disabled by default")
+	}
+	if err := state.Add(service); err != nil {
+		t.Fatal(err)
+	}
+	if err := state.SetNotifications(service.ID, false); err != nil {
+		t.Fatal(err)
+	}
+	if state.Services[0].NotificationsEnabled() {
+		t.Fatal("notification preference was not disabled")
+	}
+}
+
 func mustService(t *testing.T, name, rawURL string) Service {
 	t.Helper()
 	service, err := NewService(name, "custom", rawURL)
