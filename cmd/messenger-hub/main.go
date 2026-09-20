@@ -34,7 +34,7 @@ func run() int {
 		fmt.Fprintln(os.Stderr, "Messenger Hub: cannot load settings:", err)
 		return 1
 	}
-	return ui.Run(store, state)
+	return ui.Run(store, state, *profile == "")
 }
 
 func openStore(profile string) (*model.Store, error) {

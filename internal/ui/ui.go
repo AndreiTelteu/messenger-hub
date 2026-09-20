@@ -43,8 +43,14 @@ type controller struct {
 
 // Run starts the native GTK application. It must be called from the process's
 // initial, OS-thread-locked goroutine.
-func Run(store *model.Store, state model.State) int {
-	app := gtk.NewApplication(appID, gio.GApplicationNonUniqueValue)
+func Run(store *model.Store, state model.State, desktopInstance bool) int {
+	flags := gio.GApplicationNonUniqueValue
+	if desktopInstance {
+		// A registered application ID is required for GNOME to associate
+		// GNotification banners with the installed desktop entry.
+		flags = gio.GApplicationDefaultFlagsValue
+	}
+	app := gtk.NewApplication(appID, flags)
 	c := &controller{app: app, store: store, state: state, views: map[string]*browser.View{}, pages: map[string]*gtk.Widget{}, rows: map[uintptr]string{}, favicons: map[string]*gdk.Texture{}, notifications: map[string]map[string]struct{}{}, clearing: map[string]bool{}, clearingPages: map[string]*gtk.Widget{}, disabledPages: map[string]*gtk.Widget{}}
 	activate := func(_ gio.Application) { c.activate() }
 	app.ConnectActivate(&activate)
@@ -627,7 +633,10 @@ func (c *controller) createView(s model.Service) bool {
 		c.error(err)
 		return false
 	}
+	v.AllowNotificationOrigin(s.URL)
 	if teamsWebURL(s.URL) {
+		v.AllowNotificationOrigin("https://teams.microsoft.com/")
+		v.AllowNotificationOrigin("https://teams.cloud.microsoft/")
 		// Teams rejects calls when WebKitGTK identifies itself as Safari on
 		// Linux, even though the required WebRTC and H.264 support is present.
 		// Match the locally supported Chromium generation before first load.

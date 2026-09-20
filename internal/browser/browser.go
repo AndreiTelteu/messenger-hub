@@ -37,6 +37,17 @@ type popup struct {
 	window *gtk.Window
 }
 
+type notificationContextRegistration struct {
+	context      *webkit.WebContext
+	onInitialize func(webkit.WebContext)
+}
+
+var notificationPermissions = struct {
+	sync.Mutex
+	origins  map[string]struct{}
+	contexts map[uintptr]*notificationContextRegistration
+}{origins: map[string]struct{}{}, contexts: map[uintptr]*notificationContextRegistration{}}
+
 type View struct {
 	mu       sync.Mutex
 	view     *webkit.WebView
@@ -58,6 +69,7 @@ type View struct {
 	onIconReady    gio.AsyncReadyCallback
 	onCreate       func(webkit.WebView, uintptr) gtk.Widget
 	onPermission   func(webkit.WebView, uintptr) bool
+	onQueryState   func(webkit.WebView, uintptr) bool
 	onNotification func(webkit.WebView, uintptr) bool
 }
 
@@ -157,6 +169,80 @@ func (v *View) SetUserAgent(userAgent string) {
 		settings.Unref()
 	}
 }
+
+// AllowNotificationOrigin makes Notification.permission immediately report
+// "granted" for the origin. Some applications only inspect that property and
+// never emit a permission request, so handling permission-request alone is not
+// sufficient.
+func (v *View) AllowNotificationOrigin(uri string) {
+	origin := webkit.NewSecurityOriginForUri(uri)
+	if origin == nil {
+		return
+	}
+	key := origin.ToString()
+	origin.Unref()
+	if key == "" {
+		return
+	}
+	w := v.webView()
+	if w == nil {
+		return
+	}
+	context := w.GetContext()
+	if context == nil {
+		return
+	}
+
+	notificationPermissions.Lock()
+	notificationPermissions.origins[key] = struct{}{}
+	registration := notificationPermissions.contexts[context.GoPointer()]
+	if registration == nil {
+		registration = &notificationContextRegistration{context: context}
+		registration.onInitialize = func(current webkit.WebContext) {
+			initializeNotificationPermissions(&current)
+		}
+		context.ConnectInitializeNotificationPermissions(&registration.onInitialize)
+		notificationPermissions.contexts[context.GoPointer()] = registration
+	} else {
+		context.Unref()
+	}
+	notificationPermissions.Unlock()
+	initializeNotificationPermissions(registration.context)
+}
+
+func initializeNotificationPermissions(context *webkit.WebContext) {
+	notificationPermissions.Lock()
+	keys := make([]string, 0, len(notificationPermissions.origins))
+	for key := range notificationPermissions.origins {
+		keys = append(keys, key)
+	}
+	notificationPermissions.Unlock()
+
+	origins := make([]*webkit.SecurityOrigin, 0, len(keys))
+	for _, key := range keys {
+		if origin := webkit.NewSecurityOriginForUri(key); origin != nil {
+			origins = append(origins, origin)
+		}
+	}
+	if len(origins) == 0 {
+		context.InitializeNotificationPermissions(nil, nil)
+		return
+	}
+	nodes := make([]glib.List, len(origins))
+	for i, origin := range origins {
+		nodes[i].Data = origin.GoPointer()
+		if i > 0 {
+			nodes[i].Prev = &nodes[i-1]
+		}
+		if i+1 < len(nodes) {
+			nodes[i].Next = &nodes[i+1]
+		}
+	}
+	context.InitializeNotificationPermissions(&nodes[0], nil)
+	for _, origin := range origins {
+		origin.Unref()
+	}
+}
 func (v *View) Reload() {
 	if w := v.webView(); w != nil {
 		w.Reload()
@@ -234,6 +320,14 @@ func (v *View) connect(w *webkit.WebView, primary bool) {
 		return v.requestPermission(&w, request)
 	}
 	w.ConnectPermissionRequest(&v.onPermission)
+	v.onQueryState = func(_ webkit.WebView, ptr uintptr) bool {
+		if ptr == 0 || permissionStateQueryGetName(ptr) != "notifications" {
+			return false
+		}
+		permissionStateQueryFinish(ptr, webkit.PermissionStateGrantedValue)
+		return true
+	}
+	w.ConnectQueryPermissionState(&v.onQueryState)
 	v.onNotification = func(_ webkit.WebView, ptr uintptr) bool {
 		notification := webkit.NotificationNewFromInternalPtr(ptr)
 		v.mu.Lock()
@@ -354,12 +448,16 @@ var (
 	typeCheckInstanceIsA              func(uintptr, types.GType) bool
 	notificationPermissionRequestType func() types.GType
 	deviceInfoPermissionRequestType   func() types.GType
+	permissionStateQueryGetName       func(uintptr) string
+	permissionStateQueryFinish        func(uintptr, webkit.PermissionState)
 )
 
 func init() {
 	purego.RegisterLibFunc(&typeCheckInstanceIsA, purego.RTLD_DEFAULT, "g_type_check_instance_is_a")
 	purego.RegisterLibFunc(&notificationPermissionRequestType, purego.RTLD_DEFAULT, "webkit_notification_permission_request_get_type")
 	purego.RegisterLibFunc(&deviceInfoPermissionRequestType, purego.RTLD_DEFAULT, "webkit_device_info_permission_request_get_type")
+	purego.RegisterLibFunc(&permissionStateQueryGetName, purego.RTLD_DEFAULT, "webkit_permission_state_query_get_name")
+	purego.RegisterLibFunc(&permissionStateQueryFinish, purego.RTLD_DEFAULT, "webkit_permission_state_query_finish")
 }
 
 func allowPermission(ptr uintptr) { webkit.XWebkitPermissionRequestAllow(ptr) }

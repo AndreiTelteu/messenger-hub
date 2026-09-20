@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"runtime"
+	"strings"
 	"testing"
 	"time"
 
@@ -29,20 +30,28 @@ func TestViewRuntime(t *testing.T) {
 	defer server.Close()
 
 	type fixture struct {
-		view     *View
-		dataDir  string
-		cacheDir string
-		loaded   chan struct{}
-		notified chan string
+		view            *View
+		dataDir         string
+		cacheDir        string
+		loaded          chan struct{}
+		permissionState chan string
+		notified        chan string
 	}
 	newFixture := func() fixture {
 		dataDir, cacheDir := t.TempDir(), t.TempDir()
 		loaded := make(chan struct{}, 1)
+		permissionState := make(chan string, 1)
 		notified := make(chan string, 1)
 		view, err := New(dataDir, cacheDir, Callbacks{Changed: func(title, uri string, loading bool) {
 			if !loading && title == "browser integration" && uri == server.URL+"/" {
 				select {
 				case loaded <- struct{}{}:
+				default:
+				}
+			}
+			if !loading && strings.HasPrefix(title, "permission-") {
+				select {
+				case permissionState <- strings.TrimPrefix(title, "permission-"):
 				default:
 				}
 			}
@@ -53,7 +62,8 @@ func TestViewRuntime(t *testing.T) {
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
-		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded, notified: notified}
+		view.AllowNotificationOrigin(server.URL + "/")
+		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded, permissionState: permissionState, notified: notified}
 	}
 
 	a, b := newFixture(), newFixture()
@@ -111,8 +121,39 @@ func TestViewRuntime(t *testing.T) {
 		}
 		jsFinished <- err
 	})
-	script := `void Notification.requestPermission().then(permission => { if (permission === "granted") new Notification("Integration notification", {body: "ready"}); }); "started";`
+	script := `void navigator.permissions.query({name: "notifications"}).then(status => { document.title = "permission-" + status.state + "-" + Notification.permission; }); "started";`
 	a.view.view.EvaluateJavascript(script, -1, "", server.URL+"/", nil, &jsCallback, 0)
+	waitFor(t, 15*time.Second, func() bool {
+		select {
+		case got := <-a.permissionState:
+			if got != "granted-granted" {
+				t.Fatalf("notification permission state = %q", got)
+			}
+			return true
+		default:
+			return false
+		}
+	})
+	notificationFinished := make(chan error, 1)
+	notificationCallback := gio.AsyncReadyCallback(func(_ uintptr, result uintptr, _ uintptr) {
+		value, err := a.view.view.EvaluateJavascriptFinish(&gio.AsyncResultBase{Ptr: result})
+		if value != nil {
+			value.Unref()
+		}
+		notificationFinished <- err
+	})
+	a.view.view.EvaluateJavascript(`new Notification("Integration notification", {body: "ready"}); "shown";`, -1, "", server.URL+"/", nil, &notificationCallback, 0)
+	waitFor(t, 15*time.Second, func() bool {
+		select {
+		case err := <-notificationFinished:
+			if err != nil {
+				t.Fatalf("show notification JavaScript: %v", err)
+			}
+			return true
+		default:
+			return false
+		}
+	})
 	waitFor(t, 15*time.Second, func() bool {
 		select {
 		case err := <-jsFinished:
