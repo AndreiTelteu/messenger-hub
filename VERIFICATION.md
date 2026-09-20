@@ -29,4 +29,4 @@ Verified on CachyOS with GNOME Wayland, GTK 4.22.5, WebKitGTK 2.52.6, Go 1.27.1,
 - Verified that the per-service notification preference defaults on and persists when disabled.
 - Verified safe window-size restoration and X11 fallback when saved coordinates are offscreen.
 
-No real account credentials were entered and no messages were sent. Full provider authentication, calls, screen sharing, notifications, and file transfers remain dependent on each provider and the installed WebKitGTK/GStreamer stack.
+No messages were sent and no calls were started. Microsoft Teams was verified with an existing signed-in Chrome profile: app mode loaded without the WebKit call error or notification banner, and Chrome delivered the Teams permission confirmation through GNOME.
