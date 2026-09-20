@@ -9,7 +9,7 @@ type Preset struct {
 
 var Catalog = []Preset{
 	{ID: "whatsapp", Name: "WhatsApp", URL: "https://web.whatsapp.com/", Description: "WhatsApp Web"},
-	{ID: "teams", Name: "Microsoft Teams", URL: "https://teams.cloud.microsoft/", Description: "Microsoft Teams for the web"},
+	{ID: "teams", Name: "Microsoft Teams", URL: "https://teams.microsoft.com/", Description: "Microsoft Teams for the web"},
 	{ID: "messenger", Name: "Messenger", URL: "https://www.messenger.com/", Description: "Facebook Messenger"},
 	{ID: "instagram", Name: "Instagram", URL: "https://www.instagram.com/direct/inbox/", Description: "Instagram direct messages"},
 	{ID: "telegram", Name: "Telegram", URL: "https://web.telegram.org/", Description: "Telegram Web"},

@@ -144,7 +144,7 @@ Dragging reorders services, and Ctrl+1 through Ctrl+9 follows the saved rail pos
 
 The application persists the last unmaximized width and height, plus whether the window was maximized, and restores those on every GTK backend. It also stores X11 screen coordinates. Those coordinates restore only when the saved window rectangle intersects a current monitor; a stale offscreen position falls back to normal window-manager placement. On Wayland, the compositor owns placement, so the saved position is intentionally not applied. Stored sizes and coordinates are range-checked before conversion to native 32-bit geometry values.
 
-**The Service Owns the Stage Rule.** After the 68px rail, give all available width and height to the embedded service. Microsoft Teams uses this stage for a short Chrome handoff because its supported runtime cannot be embedded in GTK.
+**The Service Owns the Stage Rule.** After the 68px rail, give all available width and height to WebKit.
 
 **The Visible Restore Rule.** Restore range-checked X11 coordinates only for a saved window rectangle that intersects a current monitor; otherwise let the window manager place the window. On Wayland, never apply saved coordinates because the compositor owns placement.
 
@@ -180,7 +180,7 @@ Right-clicking a service opens a compact GTK popover beside its row. Menu or Shi
 
 ### Embedded service
 
-The service surface begins immediately after the rail and fills the rest of the window. Embedded service pages retain their own typography, colors, navigation, and account UI. Microsoft Teams opens in Chrome app mode and the surface shows a concise handoff with an Open Teams button. The shell does not repeat browser Back, Forward, Reload, Home, title, URL, or Manage controls above the page; Refresh, Home, and Manage live in the service menu, with Ctrl+R retained for refresh.
+The WebKit surface begins immediately after the rail and fills the rest of the window. Service pages retain their own typography, colors, navigation, and account UI. The shell does not repeat browser Back, Forward, Reload, Home, title, URL, or Manage controls above the page; Refresh, Home, and Manage live in the service menu, with Ctrl+R retained for refresh.
 
 ### Status and state surfaces
 

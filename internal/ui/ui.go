@@ -6,7 +6,6 @@ import (
 	"math"
 	"net/url"
 	"os"
-	"os/exec"
 	"strings"
 
 	"codeberg.org/puregotk/puregotk/v4/gdk"
@@ -37,8 +36,6 @@ type controller struct {
 	clearing         map[string]bool
 	clearingPages    map[string]*gtk.Widget
 	disabledPages    map[string]*gtk.Widget
-	externalPages    map[string]*gtk.Widget
-	externalOpened   map[string]bool
 	emptyPage        *gtk.Widget
 	syncingSelection bool
 	closing          bool
@@ -54,7 +51,7 @@ func Run(store *model.Store, state model.State, desktopInstance bool) int {
 		flags = gio.GApplicationDefaultFlagsValue
 	}
 	app := gtk.NewApplication(appID, flags)
-	c := &controller{app: app, store: store, state: state, views: map[string]*browser.View{}, pages: map[string]*gtk.Widget{}, rows: map[uintptr]string{}, favicons: map[string]*gdk.Texture{}, notifications: map[string]map[string]struct{}{}, clearing: map[string]bool{}, clearingPages: map[string]*gtk.Widget{}, disabledPages: map[string]*gtk.Widget{}, externalPages: map[string]*gtk.Widget{}, externalOpened: map[string]bool{}}
+	c := &controller{app: app, store: store, state: state, views: map[string]*browser.View{}, pages: map[string]*gtk.Widget{}, rows: map[uintptr]string{}, favicons: map[string]*gdk.Texture{}, notifications: map[string]map[string]struct{}{}, clearing: map[string]bool{}, clearingPages: map[string]*gtk.Widget{}, disabledPages: map[string]*gtk.Widget{}}
 	activate := func(_ gio.Application) { c.activate() }
 	app.ConnectActivate(&activate)
 	return int(app.Run(1, []string{"messenger-hub"}))
@@ -409,10 +406,6 @@ func (c *controller) openSelectedServiceMenu() {
 
 func (c *controller) reloadService(id string) {
 	c.selectID(id)
-	if service, ok := c.service(id); ok && teamsWebURL(service.URL) {
-		c.openTeams(service, true)
-		return
-	}
 	if view := c.views[id]; view != nil {
 		view.Reload()
 	}
@@ -424,10 +417,6 @@ func (c *controller) goHome(id string) {
 		return
 	}
 	c.selectID(id)
-	if teamsWebURL(service.URL) {
-		c.openTeams(service, true)
-		return
-	}
 	if view := c.views[id]; view != nil {
 		view.LoadURL(service.URL)
 	}
@@ -566,13 +555,6 @@ func (c *controller) selectID(id string) {
 		c.state.ActiveID = id
 		c.persist()
 	}
-	if teamsWebURL(s.URL) {
-		c.showExternalTeams(s)
-		if !c.externalOpened[id] {
-			c.openTeams(s, false)
-		}
-		return
-	}
 	if _, ok := c.views[id]; !ok {
 		if !c.createView(s) {
 			return
@@ -652,55 +634,19 @@ func (c *controller) createView(s model.Service) bool {
 		return false
 	}
 	v.AllowNotificationOrigin(s.URL)
+	if teamsWebURL(s.URL) {
+		v.AllowNotificationOrigin("https://teams.microsoft.com/")
+		v.AllowNotificationOrigin("https://teams.cloud.microsoft/")
+		// Teams rejects calls when WebKitGTK identifies itself as Safari on
+		// Linux, even though the required WebRTC and H.264 support is present.
+		// Match the locally supported Chromium generation before first load.
+		v.SetUserAgent("Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/153.0.0.0 Safari/537.36")
+	}
 	c.views[s.ID] = v
 	c.pages[s.ID] = v.Widget()
 	c.stack.AddNamed(v.Widget(), s.ID)
 	v.LoadURL(s.URL)
 	return true
-}
-
-func (c *controller) showExternalTeams(s model.Service) {
-	page := c.externalPages[s.ID]
-	if page == nil {
-		box := emptyPage("Microsoft Teams opens in Chrome", "Teams needs Chromium WebRTC for calls and native desktop notifications. Messenger Hub opens it as an app, without browser navigation controls.")
-		open := gtk.NewButtonWithLabel("Open Teams")
-		clicked := func(gtk.Button) { c.openTeams(s, true) }
-		open.ConnectClicked(&clicked)
-		box.Append(&open.Widget)
-		page = &box.Widget
-		c.externalPages[s.ID] = page
-		c.stack.AddNamed(page, "external-"+s.ID)
-	}
-	c.stack.SetVisibleChild(page)
-	c.setStatus("")
-}
-
-func chromiumExecutable() (string, error) {
-	for _, name := range []string{"google-chrome-stable", "google-chrome", "chromium", "chromium-browser", "microsoft-edge-stable"} {
-		if path, err := exec.LookPath(name); err == nil {
-			return path, nil
-		}
-	}
-	return "", fmt.Errorf("Chrome or Chromium is required for Microsoft Teams")
-}
-
-func (c *controller) openTeams(s model.Service, explicit bool) {
-	chrome, err := chromiumExecutable()
-	if err != nil {
-		c.error(err)
-		return
-	}
-	args := []string{"--profile-directory=Default", "--app=" + s.URL}
-	cmd := exec.Command(chrome, args...)
-	if err := cmd.Start(); err != nil {
-		c.error(fmt.Errorf("open Microsoft Teams: %w", err))
-		return
-	}
-	_ = cmd.Process.Release()
-	c.externalOpened[s.ID] = true
-	if explicit {
-		c.setStatus("Microsoft Teams opened in Chrome.")
-	}
 }
 
 func teamsWebURL(raw string) bool {
@@ -969,13 +915,6 @@ func (c *controller) showManageDialogFor(serviceID string) {
 			}
 			urlChanged := normalized != s.URL
 			c.state = candidate
-			if teamsWebURL(s.URL) || teamsWebURL(normalized) {
-				c.externalOpened[s.ID] = false
-				if page := c.externalPages[s.ID]; page != nil {
-					c.stack.Remove(page)
-					delete(c.externalPages, s.ID)
-				}
-			}
 			if !notifications.GetActive() {
 				c.withdrawServiceNotifications(s.ID)
 			}
@@ -1257,10 +1196,6 @@ func (c *controller) rememberWindowGeometry() {
 	}
 }
 func (c *controller) reloadActive() {
-	if service, ok := c.service(c.selectedID); ok && teamsWebURL(service.URL) {
-		c.openTeams(service, true)
-		return
-	}
 	if v := c.activeView(); v != nil {
 		v.Reload()
 	}

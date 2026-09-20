@@ -38,9 +38,9 @@ The active website gets almost the entire window. A narrow favicon rail handles 
 - Persistent drag-and-drop service ordering.
 - Per-service data clearing with confirmation.
 - Native permission prompts, file selection, and authentication popups.
-- Native GNOME notifications with a per-service disable switch in **Manage** for embedded services.
-- WebRTC, MediaStream, Web Audio, and encrypted-media support enabled where WebKitGTK provides it.
-- Microsoft Teams opens automatically in Chrome app mode, without browser navigation controls, so calls and native notifications use Microsoft's supported Chromium runtime.
+- Native GNOME notifications with a per-service disable switch in **Manage**.
+- WebRTC, MediaStream, Web Audio, and encrypted-media support enabled in WebKitGTK.
+- A Chromium-compatible browser identity for Microsoft Teams profiles.
 - Persistent window size and maximized state, plus safe X11 position restoration.
 - English interface and keyboard-accessible controls.
 
@@ -77,7 +77,6 @@ make build
 - Go 1.24 or newer
 - GTK4
 - WebKitGTK 6.0
-- Google Chrome, Chromium, or Microsoft Edge for Microsoft Teams
 
 | Distribution | Runtime packages |
 | --- | --- |
@@ -114,9 +113,9 @@ The settings file is written atomically with private permissions. A profile lock
 
 ## Compatibility notes
 
-Messenger Hub is a native web wrapper, not an API integration with the listed providers. A provider may restrict embedded browsers, expire sessions, or change its web client at any time. Calls, screen sharing, notifications, codecs, and OAuth flows depend on the browser engine, desktop portals, and each provider's own policy.
+Messenger Hub is a native web wrapper, not an API integration with the listed providers. A provider may restrict embedded browsers, expire sessions, or change its web client at any time. Calls, screen sharing, notifications, codecs, and OAuth flows depend on WebKitGTK, GStreamer, desktop portals, and each provider's own policy.
 
-Microsoft Teams is handled separately because WebKitGTK is outside Microsoft's supported browser list and may omit the WebRTC APIs Teams requires. Selecting a Teams service opens its saved URL in the default Chrome profile using app mode. This keeps the compact, navigation-free window while using Chrome's existing Microsoft login, WebRTC stack, and GNOME notification integration.
+Microsoft officially supports Teams for Web on recent Edge, Chrome, Firefox, and Safari releases. Messenger Hub uses a Chromium-compatible identity for Teams and enables WebRTC, media permissions, and the available GStreamer codecs. WebKitGTK is still outside Microsoft's supported browser list, so Teams can continue to reject calls even with those compatibility measures.
 
 ## Development
 
