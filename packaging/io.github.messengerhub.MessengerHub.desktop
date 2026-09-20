@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Messenger Hub
+Comment=Messaging services in isolated native WebKit profiles
+Exec=messenger-hub
+Icon=io.github.messengerhub.MessengerHub
+Terminal=false
+Categories=Network;InstantMessaging;
+StartupNotify=true
+StartupWMClass=io.github.messengerhub.MessengerHub
