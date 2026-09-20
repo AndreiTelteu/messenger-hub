@@ -984,31 +984,11 @@ func (c *controller) askPermission(kind, origin string, respond func(bool)) {
 	d.Present()
 }
 
-func (c *controller) showDesktopNotification(serviceID string, webID uint64, title, body string) bool {
+func (c *controller) showDesktopNotification(serviceID string, _ uint64, _, _ string) bool {
 	service, ok := c.service(serviceID)
-	if !ok || !service.NotificationsEnabled() {
-		return false
-	}
-	if strings.TrimSpace(title) == "" {
-		title = service.Name
-	}
-	notification := gio.NewNotification(title)
-	if notification == nil {
-		return false
-	}
-	if body != "" {
-		notification.SetBody(body)
-	}
-	notification.SetCategory("im.received")
-	notification.SetPriority(gio.GNotificationPriorityNormalValue)
-	key := desktopNotificationKey(serviceID, webID)
-	c.app.SendNotification(key, notification)
-	notification.Unref()
-	if c.notifications[serviceID] == nil {
-		c.notifications[serviceID] = map[string]struct{}{}
-	}
-	c.notifications[serviceID][key] = struct{}{}
-	return true
+	// WebKitGTK's default handler supports both page and Service Worker
+	// notifications. Stop it only when the per-service preference is disabled.
+	return !ok || !service.NotificationsEnabled()
 }
 
 func (c *controller) withdrawDesktopNotification(serviceID string, webID uint64) {

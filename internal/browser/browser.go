@@ -334,11 +334,12 @@ func (v *View) connect(w *webkit.WebView, primary bool) {
 		handler, closedHandler, closed := v.cb.Notification, v.cb.NotificationClosed, v.closed
 		v.mu.Unlock()
 		if closed || handler == nil {
-			return true
+			return false
 		}
 		id := notification.GetId()
-		if !handler(id, notification.GetTitle(), notification.GetBody()) {
-			return true
+		handled := handler(id, notification.GetTitle(), notification.GetBody())
+		if !handled {
+			return false
 		}
 		if closedHandler != nil {
 			onClosed := func(_ webkit.Notification) { closedHandler(id) }

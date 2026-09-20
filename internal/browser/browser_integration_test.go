@@ -13,6 +13,7 @@ import (
 	"codeberg.org/puregotk/puregotk/v4/gio"
 	"codeberg.org/puregotk/puregotk/v4/glib"
 	"codeberg.org/puregotk/puregotk/v4/gtk"
+	"codeberg.org/puregotk/puregotk/v4/webkit"
 )
 
 // TestViewRuntime intentionally never creates or presents a GtkWindow. It may
@@ -36,12 +37,15 @@ func TestViewRuntime(t *testing.T) {
 		loaded          chan struct{}
 		permissionState chan string
 		notified        chan string
+		propagated      chan string
+		onPropagated    func(webkit.WebView, uintptr) bool
 	}
 	newFixture := func() fixture {
 		dataDir, cacheDir := t.TempDir(), t.TempDir()
 		loaded := make(chan struct{}, 1)
 		permissionState := make(chan string, 1)
 		notified := make(chan string, 1)
+		propagated := make(chan string, 1)
 		view, err := New(dataDir, cacheDir, Callbacks{Changed: func(title, uri string, loading bool) {
 			if !loading && title == "browser integration" && uri == server.URL+"/" {
 				select {
@@ -57,13 +61,19 @@ func TestViewRuntime(t *testing.T) {
 			}
 		}, Notification: func(_ uint64, title, body string) bool {
 			notified <- title + "|" + body
-			return true
+			return false
 		}})
 		if err != nil {
 			t.Fatalf("New: %v", err)
 		}
 		view.AllowNotificationOrigin(server.URL + "/")
-		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded, permissionState: permissionState, notified: notified}
+		onPropagated := func(_ webkit.WebView, ptr uintptr) bool {
+			notification := webkit.NotificationNewFromInternalPtr(ptr)
+			propagated <- notification.GetTitle() + "|" + notification.GetBody()
+			return true
+		}
+		view.view.ConnectShowNotification(&onPropagated)
+		return fixture{view: view, dataDir: dataDir, cacheDir: cacheDir, loaded: loaded, permissionState: permissionState, notified: notified, propagated: propagated, onPropagated: onPropagated}
 	}
 
 	a, b := newFixture(), newFixture()
@@ -170,6 +180,17 @@ func TestViewRuntime(t *testing.T) {
 		case got := <-a.notified:
 			if got != "Integration notification|ready" {
 				t.Fatalf("notification = %q", got)
+			}
+			return true
+		default:
+			return false
+		}
+	})
+	waitFor(t, 15*time.Second, func() bool {
+		select {
+		case got := <-a.propagated:
+			if got != "Integration notification|ready" {
+				t.Fatalf("propagated notification = %q", got)
 			}
 			return true
 		default:
